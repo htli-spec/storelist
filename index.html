@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>門市巡檢管理 - 雲端同步最終版</title>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBwpptNy9mJmbeg-bQwYkSguhCuWhLw7gQ",
+            authDomain: "storelist-37ed4.firebaseapp.com",
+            projectId: "storelist-37ed4",
+            storageBucket: "storelist-37ed4.firebasestorage.app",
+            messagingSenderId: "616619021676",
+            appId: "1:616619021676:web:47a81094653a2e59958f49"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const taskTemplate = ["A07門市代號", "E01收銀機號", "A11門市帳號", "A15門市群組", "ZA使用權限", "AD帳號驗證", "UOF雲端帳號", "TGo高鐵兌換", "NIDIN上下架", "Google商家"];
+
+        // 本地暫存
+        let localStores = {};
+
+        // 啟動監聽雲端
+        const q = query(collection(db, "stores"), orderBy("createdAt", "desc"));
+        onSnapshot(q, (snapshot) => {
+            snapshot.forEach((doc) => {
+                const data = doc.data();
+                localStores[data.id] = data;
+            });
+            renderAll();
+        });
+
+        // 建立新門市
+        window.createNewStore = () => {
+            const storeId = 'local-' + Date.now();
+            localStores[storeId] = {
+                id: storeId, code: '', title: '', locked: false,
+                tasks: taskTemplate.map(() => 0), createdAt: Date.now()
+            };
+            renderAll();
+        };
+
+        // 刪除門市
+        window.deleteStore = async (id) => {
+            if(!confirm('確定要刪除這筆資料嗎？')) return;
+            if(id.startsWith('s')) await deleteDoc(doc(db, "stores", id));
+            delete localStores[id];
+            renderAll();
+        };
+
+        // 三態切換
+        window.cycleState = (storeId, taskIndex) => {
+            const store = localStores[storeId];
+            if (store.locked) return;
+            store.tasks[taskIndex] = (store.tasks[taskIndex] + 1) % 3;
+            renderAll();
+        };
+
+        // 上傳與鎖定 (關鍵修正點)
+        window.toggleStatus = async (id) => {
+            const card = document.getElementById(id);
+            const store = localStores[id];
+
+            // 1. 強制從畫面抓取最新值
+            const currentCode = card.querySelector('.store-code').value;
+            const currentTitle = card.querySelector('.store-title').value;
+
+            if (!store.locked) {
+                // 執行鎖定並上傳
+                const cloudId = id.startsWith('local-') ? 's' + Date.now() : id;
+                const uploadData = {
+                    ...store,
+                    id: cloudId,
+                    code: currentCode,
+                    title: currentTitle,
+                    locked: true,
+                    createdAt: store.createdAt || Date.now()
+                };
+
+                try {
+                    await setDoc(doc(db, "stores", cloudId), uploadData);
+                    if(id.startsWith('local-')) delete localStores[id];
+                    alert(`[${currentTitle}] 資料已鎖定並同步。`);
+                } catch (e) {
+                    alert("雲端同步失敗，請檢查權限設定。");
+                }
+            } else {
+                // 解鎖 (僅本地)
+                store.locked = false;
+            }
+            renderAll();
+        };
+
+        // 即時輸入同步 (不重刷 DOM)
+        window.handleInput = (id, field, value) => {
+            localStores[id][field] = value;
+            refreshSidebarOnly();
+        };
+
+        function renderAll() {
+            const container = document.getElementById('store-container');
+            const sidebarList = document.getElementById('sidebar-list');
+            container.innerHTML = '';
+            sidebarList.innerHTML = '';
+
+            const sortedKeys = Object.keys(localStores).sort((a, b) => localStores[b].createdAt - localStores[a].createdAt);
+
+            sortedKeys.forEach(key => {
+                const data = localStores[key];
+                const card = document.createElement('div');
+                card.className = `store-card ${data.locked ? 'locked' : ''}`;
+                card.id = data.id;
+
+                let taskHtml = '';
+                taskTemplate.forEach((name, i) => {
+                    const state = data.tasks[i] || 0;
+                    const char = state === 1 ? '✓' : (state === 2 ? 'X' : '');
+                    const cls = state === 1 ? 'box-check' : (state === 2 ? 'box-x' : 'box-none');
+                    taskHtml += `
+                        <div class="task-item" onclick="cycleState('${data.id}', ${i})">
+                            <div class="tri-state-box ${cls}">${char}</div>
+                            <span class="${state !== 0 ? 'text-done' : ''}">${i + 1}. ${name}</span>
+                        </div>`;
+                });
+
+                card.innerHTML = `
+                    <div class="store-header">
+                        <button class="btn-status-toggle ${data.locked ? 'done' : 'pending'}" onclick="toggleStatus('${data.id}')">
+                            ${data.locked ? '已完成' : '未完成'}
+                        </button>
+                        <div class="store-info-group">
+                            <input type="text" class="store-code" placeholder="L0000" maxlength="5" value="${data.code}" 
+                                oninput="handleInput('${data.id}', 'code', this.value)" ${data.locked ? 'disabled' : ''}>
+                            <input type="text" class="store-title" placeholder="請輸入門市名稱..." value="${data.title}" 
+                                oninput="handleInput('${data.id}', 'title', this.value)" ${data.locked ? 'disabled' : ''}>
+                        </div>
+                        <button class="btn-delete" onclick="deleteStore('${data.id}')">刪除</button>
+                    </div>
+                    <div class="task-list">${taskHtml}</div>`;
+                container.appendChild(card);
+                renderSidebarItem(data);
+            });
+        }
+
+        function renderSidebarItem(data) {
+            const sidebarList = document.getElementById('sidebar-list');
+            const li = document.createElement('li');
+            li.className = `sidebar-item ${data.locked ? 'status-done' : 'status-pending'}`;
+            li.onclick = () => document.getElementById(data.id).scrollIntoView({ behavior: 'smooth' });
+            li.innerHTML = `<div class="store-info"><strong>${data.code || '---'}</strong><br><span>${data.title || '(未填)'}</span></div><div class="status-label-side">${data.locked ? '已完成' : '未完成'}</div>`;
+            sidebarList.appendChild(li);
+        }
+
+        window.refreshSidebarOnly = () => {
+            const sidebarList = document.getElementById('sidebar-list');
+            sidebarList.innerHTML = '';
+            Object.keys(localStores).sort((a, b) => localStores[b].createdAt - localStores[a].createdAt).forEach(key => renderSidebarItem(localStores[key]));
+        };
+    </script>
+    <style>
+        :root { --primary: #27ae60; --danger: #e74c3c; --sidebar-width: 260px; }
+        body { font-family: sans-serif; background-color: #f4f7f6; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        .sidebar { width: var(--sidebar-width); background: #2c3e50; color: white; display: flex; flex-direction: column; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; background: #1a252f; text-align: center; font-weight: bold; }
+        .sidebar-list { flex-grow: 1; overflow-y: auto; list-style: none; padding: 10px; margin: 0; }
+        .sidebar-item { padding: 12px; margin-bottom: 8px; background: #34495e; border-radius: 5px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-left: 5px solid transparent; }
+        .status-label-side { font-size: 0.75em; font-weight: bold; padding: 2px 4px; border-radius: 3px; }
+        .sidebar-item.status-done { border-left-color: var(--primary); }
+        .sidebar-item.status-done .status-label-side { color: #2ecc71; }
+        .sidebar-item.status-pending { border-left-color: var(--danger); }
+        .sidebar-item.status-pending .status-label-side { color: #ff7675; }
+        .main-content { flex-grow: 1; overflow-y: auto; padding: 30px; scroll-behavior: smooth; }
+        .container { max-width: 800px; margin: auto; }
+        .btn-add { display: block; width: 180px; margin-bottom: 25px; padding: 10px; background: var(--primary); color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .store-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); }
+        .store-card.locked { background-color: #f1f2f6; opacity: 0.95; }
+        .store-header { display: flex; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 12px; margin-bottom: 15px; }
+        .btn-status-toggle { color: white; border: none; padding: 7px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; min-width: 75px; font-weight: bold; margin-right: 15px; }
+        .btn-status-toggle.pending { background-color: var(--danger); }
+        .btn-status-toggle.done { background-color: var(--primary); }
+        .store-info-group { display: flex; flex-grow: 1; align-items: baseline; border-bottom: 2px solid #bdc3c7; padding-bottom: 2px; }
+        .store-code, .store-title { font-size: 1.1em; font-weight: bold; color: #000000; background: transparent; border: none; outline: none; }
+        .store-code { width: 60px; margin-right: 4px; }
+        .store-title { flex-grow: 1; }
+        .btn-delete { background: #95a5a6; color: white; border: none; padding: 7px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; margin-left: 15px; }
+        .task-list { list-style: none; padding: 0; margin: 0; }
+        .task-item { display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #f1f1f1; cursor: pointer; }
+        .tri-state-box { width: 20px; height: 20px; border: 2px solid #34495e; border-radius: 3px; margin-right: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: white; font-weight: bold; }
+        .box-check { color: #27ae60; border-color: #27ae60; }
+        .box-x { color: #e74c3c; border-color: #e74c3c; }
+        .text-done { text-decoration: line-through; color: #bbb; }
+        .locked .btn-delete { visibility: hidden; }
+        .locked .store-info-group { border-bottom-color: transparent; }
+        .locked input { color: #666 !important; }
+        .locked .task-item { cursor: default; pointer-events: none; opacity: 0.8; }
+    </style>
+</head>
+<body>
+<aside class="sidebar">
+    <div class="sidebar-header">🏪 巡檢管理系統</div>
+    <ul class="sidebar-list" id="sidebar-list"></ul>
+</aside>
+<main class="main-content">
+    <div class="container">
+        <button class="btn-add" onclick="createNewStore()">＋ 建立新清單</button>
+        <div id="store-container"></div>
+    </div>
+</main>
+</body>
+</html>
