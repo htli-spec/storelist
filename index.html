@@ -38,8 +38,13 @@
         window.createNewStore = () => {
             const storeId = 'local-' + Date.now();
             localStores[storeId] = {
-                id: storeId, code: '', title: '', locked: false,
-                tasks: taskTemplate.map(() => 0), createdAt: Date.now()
+                id: storeId, 
+                type: '直營', // 預設值
+                code: '', 
+                title: '', 
+                locked: false,
+                tasks: taskTemplate.map(() => 0), 
+                createdAt: Date.now()
             };
             renderAll();
         };
@@ -47,7 +52,7 @@
         // 刪除門市
         window.deleteStore = async (id) => {
             if(!confirm('確定要刪除這筆資料嗎？')) return;
-            if(id.startsWith('s')) await deleteDoc(doc(db, "stores", id));
+            if(!id.startsWith('local-')) await deleteDoc(doc(db, "stores", id));
             delete localStores[id];
             renderAll();
         };
@@ -60,21 +65,21 @@
             renderAll();
         };
 
-        // 上傳與鎖定 (關鍵修正點)
+        // 上傳與鎖定
         window.toggleStatus = async (id) => {
             const card = document.getElementById(id);
             const store = localStores[id];
 
-            // 1. 強制從畫面抓取最新值
+            const currentType = card.querySelector('.store-type').value;
             const currentCode = card.querySelector('.store-code').value;
             const currentTitle = card.querySelector('.store-title').value;
 
             if (!store.locked) {
-                // 執行鎖定並上傳
                 const cloudId = id.startsWith('local-') ? 's' + Date.now() : id;
                 const uploadData = {
                     ...store,
                     id: cloudId,
+                    type: currentType,
                     code: currentCode,
                     title: currentTitle,
                     locked: true,
@@ -89,13 +94,11 @@
                     alert("雲端同步失敗，請檢查權限設定。");
                 }
             } else {
-                // 解鎖 (僅本地)
                 store.locked = false;
             }
             renderAll();
         };
 
-        // 即時輸入同步 (不重刷 DOM)
         window.handleInput = (id, field, value) => {
             localStores[id][field] = value;
             refreshSidebarOnly();
@@ -133,9 +136,15 @@
                             ${data.locked ? '已完成' : '未完成'}
                         </button>
                         <div class="store-info-group">
-                            <input type="text" class="store-code" placeholder="L0000" maxlength="5" value="${data.code}" 
+                            <select class="store-type" onchange="handleInput('${data.id}', 'type', this.value)" ${data.locked ? 'disabled' : ''}>
+                                <option value="直營" ${data.type === '直營' ? 'selected' : ''}>直營</option>
+                                <option value="加盟" ${data.type === '加盟' ? 'selected' : ''}>加盟</option>
+                                <option value="內創" ${data.type === '內創' ? 'selected' : ''}>內創</option>
+                                <option value="多品牌" ${data.type === '多品牌' ? 'selected' : ''}>多品牌</option>
+                            </select>
+                            <input type="text" class="store-code" placeholder="L0000" maxlength="5" value="${data.code || ''}" 
                                 oninput="handleInput('${data.id}', 'code', this.value)" ${data.locked ? 'disabled' : ''}>
-                            <input type="text" class="store-title" placeholder="請輸入門市名稱..." value="${data.title}" 
+                            <input type="text" class="store-title" placeholder="請輸入門市名稱..." value="${data.title || ''}" 
                                 oninput="handleInput('${data.id}', 'title', this.value)" ${data.locked ? 'disabled' : ''}>
                         </div>
                         <button class="btn-delete" onclick="deleteStore('${data.id}')">刪除</button>
@@ -151,7 +160,12 @@
             const li = document.createElement('li');
             li.className = `sidebar-item ${data.locked ? 'status-done' : 'status-pending'}`;
             li.onclick = () => document.getElementById(data.id).scrollIntoView({ behavior: 'smooth' });
-            li.innerHTML = `<div class="store-info"><strong>${data.code || '---'}</strong><br><span>${data.title || '(未填)'}</span></div><div class="status-label-side">${data.locked ? '已完成' : '未完成'}</div>`;
+            li.innerHTML = `
+                <div class="store-info">
+                    <strong>[${data.type || '直營'}] ${data.code || '---'}</strong><br>
+                    <span>${data.title || '(未填)'}</span>
+                </div>
+                <div class="status-label-side">${data.locked ? '已完成' : '未完成'}</div>`;
             sidebarList.appendChild(li);
         }
 
@@ -183,9 +197,13 @@
         .btn-status-toggle.pending { background-color: var(--danger); }
         .btn-status-toggle.done { background-color: var(--primary); }
         .store-info-group { display: flex; flex-grow: 1; align-items: baseline; border-bottom: 2px solid #bdc3c7; padding-bottom: 2px; }
+        
+        /* 下拉選單樣式 */
+        .store-type { font-size: 1em; border: none; background: #ecf0f1; border-radius: 3px; padding: 2px 5px; margin-right: 10px; cursor: pointer; font-weight: bold; color: #2c3e50; }
         .store-code, .store-title { font-size: 1.1em; font-weight: bold; color: #000000; background: transparent; border: none; outline: none; }
-        .store-code { width: 60px; margin-right: 4px; }
+        .store-code { width: 65px; margin-right: 4px; }
         .store-title { flex-grow: 1; }
+        
         .btn-delete { background: #95a5a6; color: white; border: none; padding: 7px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; margin-left: 15px; }
         .task-list { list-style: none; padding: 0; margin: 0; }
         .task-item { display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #f1f1f1; cursor: pointer; }
@@ -195,7 +213,7 @@
         .text-done { text-decoration: line-through; color: #bbb; }
         .locked .btn-delete { visibility: hidden; }
         .locked .store-info-group { border-bottom-color: transparent; }
-        .locked input { color: #666 !important; }
+        .locked input, .locked select { color: #666 !important; background: transparent !important; appearance: none; }
         .locked .task-item { cursor: default; pointer-events: none; opacity: 0.8; }
     </style>
 </head>
@@ -211,6 +229,4 @@
     </div>
 </main>
 </body>
-
 </html>
-
